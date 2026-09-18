@@ -1,5 +1,8 @@
+import re
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+
+from ipykernel.eventloops import loop_wx_exit
 from ollama import Client
 import threading
 import os
@@ -47,6 +50,131 @@ AVAILABLE_MODELS = {"Qwen 2.5 Coder 7B (lightweight)": "qwen2.5-coder:7b",
                     "DeepSeek Coder 6.7B (lightweight)": "deepseek-coder:6.7b",
                     "CodeGemma 7B (lightweight)": "codegemma:7b",
                    "DeepSeek R1 (reasoning)": "deepseek-r1:latest",}
+
+# -------------
+# OBJECTIVES - OPTIMIZATION OR IMPROVEMENTS GOALS
+# -------------
+OBJECTIVES = {
+    "Performance": {
+        "Dockerfile": """
+            Focus on improving build and deployment efficiency.
+
+            Consider:
+            - reducing unnecessary build steps
+            - improving Docker layer caching
+            - reducing redundant operations
+            - optimizing instruction ordering
+            - reducing image size when beneficial for build and deployment performance
+        """,
+
+        "Kubernetes YAML": """
+            Focus on improving application deployment and execution efficiency.
+
+            Consider:
+            - avoiding unnecessary resources and configuration elements
+            - improving resource requests and limits when appropriate
+            - reducing unnecessary replicas or components
+            - improving container configuration
+            - avoiding unnecessary network and storage operations
+        """
+    },
+
+    "Energy efficiency": {
+        "Dockerfile": """
+            Focus on reducing unnecessary computational and resource consumption.
+
+            Consider:
+            - reducing unnecessary build operations
+            - avoiding redundant package installations
+            - minimizing unnecessary data transfers
+            - improving build efficiency
+            - reducing resource-intensive operations when possible
+        """,
+
+        "Kubernetes YAML": """
+            Focus on reducing unnecessary resource consumption during deployment and execution.
+
+            Consider:
+            - avoiding unnecessary replicas
+            - avoiding excessive CPU and memory requests and limits
+            - improving resource allocation
+            - reducing unnecessary containers and components
+            - avoiding unnecessary network and storage operations
+        """
+    },
+
+    "Memory usage": {
+        "Dockerfile": """
+            Focus on reducing the memory footprint.
+
+            Consider:
+            - using lightweight base images when appropriate
+            - avoiding unnecessary dependencies
+            - reducing duplicated files and artifacts
+            - minimizing unnecessary runtime components
+        """,
+
+        "Kubernetes YAML": """
+            Focus on reducing memory consumption.
+
+            Consider:
+            - setting appropriate memory requests and limits
+            - avoiding unnecessarily high memory allocations
+            - removing unnecessary containers or components
+            - reducing duplicated configuration
+            - using appropriate resource configurations
+        """
+    },
+
+    "Dependency optimization": {
+        "Dockerfile": """
+            Focus on minimizing and managing dependencies.
+
+            Consider:
+            - removing unnecessary packages
+            - avoiding redundant installations
+            - using only required runtime dependencies
+            - cleaning package manager caches
+            - separating build-time and runtime dependencies when appropriate
+        """,
+
+        "Kubernetes YAML": """
+            Focus on minimizing unnecessary deployment dependencies.
+
+            Consider:
+            - removing unnecessary containers
+            - removing redundant configuration elements
+            - avoiding unnecessary volumes, services, and dependencies
+            - simplifying inter-component dependencies
+            - keeping only the resources required by the application
+        """
+    },
+
+    "Security hardening": {
+        "Dockerfile": """
+            Focus on improving container security.
+
+            Consider:
+            - avoiding execution as root
+            - avoiding insecure base images
+            - avoiding unnecessary exposed ports
+            - avoiding secrets in environment variables
+            - using safer Dockerfile practices
+        """,
+
+        "Kubernetes YAML": """
+            Focus on improving Kubernetes deployment security.
+
+            Consider:
+            - avoiding privileged containers
+            - avoiding unnecessary root execution
+            - configuring appropriate security contexts
+            - avoiding unnecessary exposed services or ports
+            - avoiding hard-coded secrets
+            - applying safer Kubernetes security practices
+        """
+    }
+}
 # -------------
 # OLLAMA CONFIG
 # -------------
@@ -109,19 +237,20 @@ def build_prompt(language, optimization_type, code, vulnerability_scan, model, r
                         - DO NOT explain choices
                         - ONLY valid executable code
                     """
+    objective_instructions = OBJECTIVES.get(optimization_type, {}).get(language, "")
     if vulnerability_scan:
-        security_section = f""" Security analysis:
+        security_section = f""" Security considerations:
                             - Detect usage of known vulnerable or unsafe libraries for {language}
                             - Replace them with safer alternatives when possible
                             
-                            After the optimized code, append a section EXACTLY in this formrat:
-                            - <library_name>: <reason ot CVE ot unsafe pattern>
-                            - <library_name>: <reason>
-                            
-                            If no vulnerable libraries are found, write:
-                            #VULNERABILITY REPORT
-                            None
+                            IMPORTANT:
+                            - do NOT include a vulnerability report in the output
+                            - do NOT explain your findings
+                            - do NOT add any text outside the optimized {language} code
                             """
+                        # If no vulnerable libraries are found, write:
+        #                             #VULNERABILITY REPORT
+        #                             None
     if rag_context:
         rag_section = f"""
                         Use the following verified optimization patterns, security fixes, or documentation standards retrieved from your corporate/internal  repository to guide your optimization:
@@ -156,6 +285,9 @@ def build_prompt(language, optimization_type, code, vulnerability_scan, model, r
                 
                 Optimization focus:
                     {optimization_type}
+                
+                Optimization-specific instructions:
+                    {objective_instructions}
                 
                 {security_section}
                 
@@ -381,6 +513,205 @@ def run_analysis(language, original_code, optimized_code, log_callback):
         #     safe_run("dynamic", "security", security_dynamic_docker.run, original_code, optimized_code)
     
     return results
+
+# 
+# clean llm output and keep only code
+#
+def clean_optimization_code(code, language):
+
+    if language == 'Dockerfile':
+        return clean_opt_dockerfile(code, language)
+    elif language == 'Kubernetes YAML':
+        return clean_opt_kubernetes(code, language)
+    return code.strip()
+
+def clean_opt_dockerfile(code, language):
+    if not code:
+        return ""
+
+    code = code.strip()
+
+    # remove markdonw
+    code = re.sub(r"```(?:dockerfile|yaml|yml)?\s*", "", code, flags=re.IGNORECASE)
+    code = re.sub(r"```", "", code)
+
+    # remove vulnerability report
+    vulnerability_pattern = re.compile(
+        r"(?im)^\s*#{0,6}\s*vulnerability\s+"
+        r"(?:report|analysis|findings|scan)\s*:?.*$"
+    )
+
+    match = vulnerability_pattern.search(code)
+    if match:
+        code = code[:match.start()].rstrip()
+
+    # remove triple quotes
+    code = code.strip()
+
+    if code.startswith("'''") and code.endswith("'''"):
+        code = code[3:-3].strip()
+
+    elif code.startswith('"""') and code.endswith('"""'):
+        code = code[3:-3].strip()
+
+    # remove description text after the code
+    if language == 'Dockerfile':
+        docker_instructions = {
+            "FROM", "RUN", "CMD", "LABEL", "MAINTAINER",
+            "EXPOSE", "ENV", "ADD", "COPY", "ENTRYPOINT",
+            "VOLUME", "USER", "WORKDIR", "ARG", "ONBUILD",
+            "STOPSIGNAL", "HEALTHCHECK", "SHELL"
+        }
+
+    lines = code.splitlines()
+    real_code_lines = []
+
+    for line in lines:
+        stripped = line.strip()
+        lower = stripped.lower()
+
+        if (
+            lower.startswith("here is")
+            or lower.startswith("here's")
+                or lower.startswith("optimized dockerfile:")
+                or lower.startswith("optimized yaml:")
+                or lower.startswith("optimized kubernetes")
+                or lower.startswith("the optimized")
+                or lower.startswith("sure,")
+        ):
+            continue
+
+        if lower == 'none':
+            continue
+        real_code_lines.append(line)
+
+    code = "\n".join(lines).strip()
+
+    return code
+
+def clean_opt_kubernetes(code, language):
+
+    if not code:
+        return ""
+
+    code = code.strip()
+
+    # remove markdown
+    code = re.sub(r"```(?:yaml|yml|kubernetes)?\s*",
+        "",
+        code,
+        flags = re.IGNORECASE)
+    code = re.sub(r"```", "", code)
+    code = code.strip()
+
+    # remove vulneranbility report
+    vulnerability_pattern = re.compile(
+        r"(?im)^\s*#{0,6}\s*vulnerability\s+"
+        r"(?:report|analysis|findings|scan)\s*:?.*$"
+    )
+
+    match = vulnerability_pattern.search(code)
+
+    if match:
+        code = code[:match.start()].rstrip()
+
+    # remove triple quotes
+    code = code.strip()
+
+    if code.startswith("'''") and code.endswith("'''"):
+        code = code[3:-3].strip()
+
+    elif code.startswith('"""') and code.endswith('"""'):
+        code = code[3:-3].strip()
+
+    # initial part of the file
+    lines = code.splitlines()
+    yaml_start = None
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        if not stripped:
+            continue
+
+        # valid comment can appear before the doc
+        if stripped.startswith("#"):
+            continue
+
+        if (stripped.startswith("apiVersion") or stripped.startswith("kind:") or stripped == "---"):
+            yaml_start = i
+            break
+
+    if yaml_start is not None:
+        lines = lines[yaml_start:]
+
+    code = "\n".join(lines).strip()
+
+    # try to identify and remove coomments after the code
+    try:
+        documents = list(yaml.safe_load_all(code))
+        valid_documents = [doc for doc in documents if isinstance(doc, dict)]
+
+        if valid_documents:
+            return code.strip()
+    except yaml.YAMLError:
+        pass
+
+    #  If YAML is invalid, progressively remove trailing lines  #
+    lines = code.splitlines()
+
+    for end in range(len(lines), 0, -1):
+
+        candidate = "\n".join(lines[:end]).strip()
+
+        if not candidate:
+            continue
+
+        try:
+            documents = list(yaml.safe_load_all(candidate))
+
+            valid_documents = [
+                doc for doc in documents
+                if isinstance(doc, dict)
+            ]
+
+            if valid_documents:
+                code = candidate
+                break
+
+        except yaml.YAMLError:
+            continue
+
+    #  again Kubernetes validation
+    try:
+        documents = list(yaml.safe_load_all(code))
+
+        kubernetes_documents = []
+
+        for doc in documents:
+
+            if not isinstance(doc, dict):
+                continue
+
+            # Kubernetes resources normally require these fields.
+            if (
+                    "apiVersion" in doc
+                    and "kind" in doc
+                    and "metadata" in doc
+            ):
+                kubernetes_documents.append(doc)
+
+        if kubernetes_documents:
+            return code.strip()
+
+    except yaml.YAMLError:
+        pass
+
+    return code.strip()
+
+
+
+
 #
 # LOGIC BEHIND THE OPTIMIZATION
 #
@@ -484,6 +815,7 @@ def run_optimization():
     messages = [{"role":"user", "content":prompt}]
     def worker():
         global last_optimized_code, chat_history
+        language = language_var.get()
         optimized_code = ""
         clean_code = ""
         vulnerable_libs = []
@@ -506,45 +838,49 @@ def run_optimization():
                 log_to_status("Model returned empty output.")
                 root.after(0, lambda: update_model_status(f"Model: {model} - Status: Idle", "gray"))
                 return
+            #
+            # optimized_code_full = optimized_code.strip()
+            # extra_notes = []
+            #
+            # marker = "# VULNERABILITY REPORT"
+            # if vulnerability_scan and marker.lower() in optimized_code_full.lower():
+            #     parts = optimized_code_full.split(marker, 1)
+            #     optimized_code_full = parts[0].strip()
+            #     report_part = parts[1].strip()
+            #
+            #     for line in report_part.splitlines():
+            #         line = line.strip()
+            #         if line and line.lower() != 'none' and line.startswith('-'):
+            #             vulnerable_libs.append(line[1:].strip())
+            #
+            # # clean_code = optimized_code_full
+            # # if "'''" in optimized_code_full:
+            # #     blocks = optimized_code_full.split("'''")
+            # #     code_candidates = [blocks[i].strip() for i in range(1, len(blocks), 2)]
+            # #     if code_candidates:
+            # #         clean_code = "\n\n".join(code_candidates)
+            # clean_code = optimized_code_full.strip()
+            # # cerchiamo di pulire bene il codice..
+            # if clean_code.startswith("'''"):
+            #     lines = clean_code.split("'''")
+            #
+            #     if lines and lines[0].strip().startswith("'''"):
+            #         lines = lines[1:]
+            #     if lines and lines[-1].strip() == "'''":
+            #         lines = lines[:-1]
+            #     clean_code = "\n".join(lines).strip()
+            # lines = clean_code.splitlines()
+            # real_code_lines = []
+            # for line in lines:
+            #     stripped = line.strip()
+            #     if stripped.startswith('#') or stripped.startswith('**') or stripped.lower().startswith('security') or stripped.lower().startswith('recommend') or len(stripped.split())>12 or line.lower() == 'none':
+            #         extra_notes.append(line)
+            #     else:
+            #         real_code_lines.append(line)
+            # clean_code = '\n'.join(real_code_lines).strip()
             optimized_code_full = optimized_code.strip()
             extra_notes = []
-
-            marker = "# VULNERABILITY REPORT"
-            if vulnerability_scan and marker.lower() in optimized_code_full.lower():
-                parts = optimized_code_full.split(marker, 1)
-                optimized_code_full = parts[0].strip()
-                report_part = parts[1].strip()
-
-                for line in report_part.splitlines():
-                    line = line.strip()
-                    if line and line.lower() != 'none' and line.startswith('-'):
-                        vulnerable_libs.append(line[1:].strip())
-
-            # clean_code = optimized_code_full
-            # if "'''" in optimized_code_full:
-            #     blocks = optimized_code_full.split("'''")
-            #     code_candidates = [blocks[i].strip() for i in range(1, len(blocks), 2)]
-            #     if code_candidates:
-            #         clean_code = "\n\n".join(code_candidates)
-            clean_code = optimized_code_full.strip()
-            # cerchiamo di pulire bene il codice..
-            if clean_code.startswith("'''"):
-                lines = clean_code.split("'''")
-
-                if lines and lines[0].strip().startswith("'''"):
-                    lines = lines[1:]
-                if lines and lines[-1].strip() == "'''":
-                    lines = lines[:-1]
-                clean_code = "\n".join(lines).strip()
-            lines = clean_code.splitlines()
-            real_code_lines = []
-            for line in lines:
-                stripped = line.strip()
-                if stripped.startswith('#') or stripped.startswith('**') or stripped.lower().startswith('security') or stripped.lower().startswith('recommend') or len(stripped.split())>12 or line.lower() == 'none':
-                    extra_notes.append(line)
-                else:
-                    real_code_lines.append(line)
-            clean_code = '\n'.join(real_code_lines).strip()
+            clean_code = clean_optimization_code(optimized_code_full, language)
             last_optimized_code = clean_code
             chat_history = []
 
@@ -724,10 +1060,10 @@ rag_enabled_var = tk.BooleanVar(value=False)
 top = ttk.Frame(root, padding=10)
 top.pack(fill=tk.X)
 
-ttk.Label(top, text="Language").pack(side=tk.LEFT)
+ttk.Label(top, text="Configuration type").pack(side=tk.LEFT)
 ttk.Combobox(top, textvariable=language_var, values=["Dockerfile", "Kubernetes YAML"], width=16, state="readonly").pack(side=tk.LEFT, padx=5)
 
-ttk.Label(top, text="Optimization").pack(side=tk.LEFT)
+ttk.Label(top, text="Optimization objective").pack(side=tk.LEFT)
 ttk.Combobox(top, textvariable=optimization_var,
              values=["Performance", "Energy efficiency", "Memory usage", "Dependency optimization", "Security hardening"],
              width=25, state="readonly").pack(side=tk.LEFT, padx=5)
