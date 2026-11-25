@@ -62,4 +62,16 @@ The application requires the following components:
 - Ollama 
 - Docker Engine or a compatible Docker environment
 
+## Licence
+Copyright © University of Sassari.
+
+This project is licensed under the
+PolyForm Noncommercial License 1.0.0.
+
+The software is provided for non-commercial use only.
+Any use, redistribution, or modification must comply
+with the terms of the license.
+
+If you use this software in scientific research,
+please acknowledge the University of Sassari.
   
